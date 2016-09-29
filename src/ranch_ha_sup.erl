@@ -12,7 +12,7 @@
 
 %% API
 -export([start_link/0,
-	 start_monitor/1]).
+	 start_monitor/2]).
 
 %% Supervisor callbacks
 -export([init/1]).
@@ -23,8 +23,8 @@ start_link() ->
     supervisor:start_link({local, ?SERVER}, ?MODULE, []).
 
 
-start_monitor(Nodes) ->
-    supervisor:start_child(?SERVER, [Nodes]).
+start_monitor(Nodes, Fun) ->
+    supervisor:start_child(?SERVER, [Nodes, Fun]).
 
 %%%
 %%% Private
