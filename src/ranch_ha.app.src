@@ -1,0 +1,20 @@
+%%-*- mode: erlang -*-
+{application, ranch_ha,
+ [
+  {id, "git"},
+  {vsn, "0.1"},
+  {description, "ranch HA"},
+  {mod, {ranch_ha, []}},
+  {modules, []},
+  {registered, [
+		ranch_ha_monitor
+	       ]},
+  {applications,
+   [
+    kernel,
+    stdlib,
+    inets,
+    ranch
+   ]},
+  {env, []}
+ ]}.
