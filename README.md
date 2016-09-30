@@ -1,3 +1,5 @@
 # Ranch HA
 
-HAProxy + Keepalived + HTTP server for ranch-enabled apps
+`ranch_ha` implements [ranch](https://github.com/ninenines/ranch)
+protocol behaviour for adding High-Availability features to
+ranch-enabled applications.
