@@ -2,6 +2,7 @@
 
 -include_lib("eunit/include/eunit.hrl").
 -include_lib("common_test/include/ct.hrl").
+-include_lib("ranch_ha_tests.hrl").
 
 -compile(export_all).
 
@@ -35,8 +36,8 @@ end_per_testcase(_TestCase, Config) ->
 %%
 single(_Config) ->
     {ok, _} = ranch_ha_sup:start_monitor([node()], fun (master) ->
-							   io:format("MASTER mode");
+							   ?log("MASTER mode", []);
 						       (slave) -> 
-							   io:format("SLAVE mode")
+							   ?log("SLAVE mode", [])
 						   end),
     ?assertMatch(master, ranch_ha_monitor:status()).

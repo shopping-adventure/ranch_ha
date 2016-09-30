@@ -122,8 +122,8 @@ slave({call, From}, status, Data) ->
 priority(Node, Nodes) -> priority(Node, 0, Nodes).
 
 priority(_, _, []) -> throw(not_found);
-priority(Node, I, [ Node | _Nodes ]) -> I;
-priority(Node, I, [ _Node2 | Nodes]) -> priority(Node, I-1, Nodes).
+priority(Node, I, [ {Node, _} | _Nodes ]) -> I;
+priority(Node, I, [ {_Node2, _} | Nodes]) -> priority(Node, I-1, Nodes).
 
 
 status(Node, Status, Nodes) -> lists:keyreplace(Node, 1, Nodes, {Node, Status}).
