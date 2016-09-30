@@ -1,0 +1,20 @@
+% -*- mode: erlang -*-
+{auto_compile, false}.
+
+{logdir, all_nodes, "@TOPDIR@/logs"}.
+{logdir, master, "@TOPDIR@/logs"}.
+
+{alias, test, "@TEST_DIR@"}.
+
+{node, a, 'nodeA@@HOSTNAME@'}.
+
+{init, [a], {node_start, [
+			  {monitor_master, true},
+			  {erl_flags, "-pa @PATHS@"},
+			  {startup_functions, 
+			   [
+			    {application, ensure_all_started, [ranch_ha]}
+			   ]}
+			 ]}}.
+
+{suites, [a], test, single_SUITE}.

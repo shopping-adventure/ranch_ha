@@ -6,15 +6,18 @@
 
 {alias, test, "@TEST_DIR@"}.
 
-{node, a, 'nodeA@aquila.lan'}.
-{node, b, 'nodeB@aquila.lan'}.
-{node, c, 'nodeC@aquila.lan'}.
-{node, d, 'nodeD@aquila.lan'}.
+{node, a, 'nodeA@@HOSTNAME@'}.
+{node, b, 'nodeB@@HOSTNAME@'}.
+{node, c, 'nodeC@@HOSTNAME@'}.
+{node, d, 'nodeD@@HOSTNAME@'}.
 
 {init, [a,b,c,d], {node_start, [
 				{monitor_master, true},
 				{erl_flags, "-pa @PATHS@"},
-				{startup_functions, [{application, ensure_all_started, [ranch_ha]}]}
+				{startup_functions, 
+				 [
+				  {application, ensure_all_started, [ranch_ha]}
+				 ]}
 			       ]}}.
 
-{suites, [a,b,c,d], test, all}.
+{suites, [a,b,c,d], test, cluster_SUITE}.

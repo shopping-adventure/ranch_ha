@@ -1,4 +1,4 @@
--module(ranch_ha_monitor_SUITE).
+-module(single_SUITE).
 
 -include_lib("eunit/include/eunit.hrl").
 -include_lib("common_test/include/ct.hrl").
@@ -7,26 +7,21 @@
 
 suite() -> [{timetrap, {seconds, 20}}].
 
-groups() -> 
-    [
-     {monitor, [parallel, {repeat, 10}], [single]}
-    ].
-
 all() ->
-    [ {group, monitor} ].
+    [ single ].
 
 init_per_suite(Config) ->
-    Config.
-
-end_per_suite(_Config) ->
-    ok.
-
-init_per_group(_group, Config) ->
     _ = application:ensure_all_started(ranch_ha),
     Config.
 
-end_per_group(_group, Config) ->
+end_per_suite(_Config) ->
     ok = application:stop(ranch_ha),
+    ok.
+
+init_per_group(_group, Config) ->
+    Config.
+
+end_per_group(_group, Config) ->
     Config.
 
 init_per_testcase(_TestCase, Config) ->
