@@ -12,29 +12,34 @@
 
 -behaviour(application).
 
--export([start_cluster/3]).
+-export([new/1,
+	 start_cluster/3]).
 
 %% Application callbacks
 -export([start/2, stop/1]).
 
--type opt() :: {refresh, integer()}.    % interval between dead node pinging
+-type opt() :: {refresh, integer()}
+	     | {policy, ranch_ha_policy:t()}.
 
 -export_type([opt/0]).
 
--spec start_cluster(Ref :: atom(),
+-spec new(Ref :: atom()) -> #cluster{}.
+new(Ref) ->
+    #cluster{
+       id=Ref,
+       monitor=?monitor_id(Ref), 
+       policy=?policy_id(Ref)}.
+    
+
+-spec start_cluster(Cluster :: #cluster{},
 		    Nodes :: [atom()], 
 		    Opts :: [opt()]) ->
 			   {ok, #cluster{}} | {error, term()}.
-start_cluster(Ref, Nodes, Opts) ->
-    {ok, _} = application:ensure_all_started(ranch_ha),
-    Cluster = #cluster{
-		 id=Ref,
-		 monitor=?monitor_id(Ref), 
-		 policy=?policy_id(Ref)},
+start_cluster(Cluster, Nodes, Opts) ->
     case ranch_ha_sup:start_monitor(Cluster, Nodes, Opts) of
-	{error, {already_started, _Pid}} -> {ok, Cluster};
+	{error, {already_started, Pid}} -> {ok, Pid};
 	{error, Err} -> {error, Err};
-	{ok, _Pid} -> {ok, Cluster}
+	{ok, Pid} -> {ok, Pid}
     end.
 
 %% Application callbacks

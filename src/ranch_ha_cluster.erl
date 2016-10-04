@@ -21,7 +21,7 @@
 
 -spec start_link(#cluster{}, [node()], term()) -> {ok, pid()} | {error, term()}.
 start_link(Cluster, Nodes, Opts) ->
-    supervisor:start_link(?MODULE, [Cluster, Nodes, Opts]).
+    supervisor:start_link({local, Cluster#cluster.id}, ?MODULE, [Cluster, Nodes, Opts]).
 
 %%%
 %%% Private

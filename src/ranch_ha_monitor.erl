@@ -38,10 +38,14 @@
 
 -spec start_link(#cluster{}, [node()], [ranch_ha:opt()]) -> {ok, pid()} | {error, term()}.
 start_link(Cluster, Nodes, Opts) ->
-    Args = [Cluster#cluster.id, Nodes, Opts],
-    Refresh = proplists:get_value(refresh, Opts, ?DELAY),
+    Args = [Cluster, Nodes, Opts],
     gen_statem:start_link({local, Cluster#cluster.monitor}, ?MODULE, 
-			  #{ cluster => Cluster, nodes => Nodes, refresh => Refresh, args => Args }, []).
+			  #{ cluster => Cluster,
+			     nodes => Nodes,
+			     refresh => proplists:get_value(refresh, Opts, ?DELAY),
+			     master_up => proplists:get_value(master_up, Opts, undefined),
+			     master_down => proplists:get_value(master_down, Opts, undefined),
+			     args => Args }, []).
 
 
 -spec 'master?'(#cluster{}) -> master | slave.
@@ -65,17 +69,15 @@ callback_mode() ->
     state_functions.
 
 
-init(#{ nodes := NodesList, refresh := Refresh, cluster := Cluster, args := Args }) ->
+init(#{ nodes := NodesList }=Opts) ->
     ?debug("Start monitoring nodes: ~p", [NodesList]),
     ok = net_kernel:monitor_nodes(true, [nodedown_reason]),
     T_Nodes = init_table(NodesList),
     ok = connect(T_Nodes),
-    State0 = case 'status?'(node(), T_Nodes) of 
-		 master -> ?info("Set MASTER mode", []), master; 
-		 slave -> ?info("Set SLAVE mode", []), slave
-	     end,
+    Refresh = maps:get(refresh, Opts),
+    Data = Opts#{ nodes := T_Nodes },
     {ok, _} = timer:send_after(Refresh, refresh),
-    {ok, State0, #{ nodes => T_Nodes, refresh => Refresh, cluster => Cluster, args => Args }}.
+    init_state('status?'(node(), T_Nodes), Data).
 
 
 terminate(_Reason, _Data, _State) ->
@@ -91,8 +93,10 @@ master(info, {nodeup, Node, _Infos}, #{ nodes := T_Nodes }=Data) ->
     ok = nodeup(Node, Data),
     case priority(node(), T_Nodes) of
 	MyPriority when Priority < MyPriority ->
-	    ?debug("Set SLAVE mode (MASTER: ~s)", [Node]),
-	    {next_state, slave, Data};
+	    case master_down(Data) of
+		ok -> {next_state, slave, Data};
+		{error, Err} -> {stop, Err}
+	    end;
 	_ ->
 	    ?debug("New node up: ~s", [Node]),
 	    {keep_state, Data}
@@ -123,8 +127,10 @@ slave(info, {nodedown, Node, _Infos}, #{ nodes := T_Nodes }=Data) ->
 	MyPriority when Priority < MyPriority ->
 	    case 'status?'(node(), T_Nodes) of
 		master ->
-		    ?debug("Set MASTER mode", []),
-		    {next_state, master, Data};
+		    case master_up(Data) of
+			ok -> {next_state, master, Data};
+			{error, Err} -> {stop, Err}
+		    end;
 		slave ->
 		    {next_state, slave, Data}
 	    end
@@ -149,23 +155,40 @@ init_table(NodesList) ->
     T_Nodes.
 
 
+
+init_state(master, Data) ->
+    case master_up(Data) of
+	ok -> {ok, master, Data};
+	{error, Err} -> {stop, Err}
+    end;
+
+init_state(slave, Data) ->
+    case master_down(Data) of
+	ok -> {ok, slave, Data};
+	{error, Err} -> {stop, Err}
+    end.
+
+
+master_up(#{ master_up := Fun, cluster := Cluster }) ->
+    ?info("Set MASTER mode", []),
+    Fun(Cluster).
+
+
+master_down(#{ master_down := Fun, cluster := Cluster }) ->
+    ?info("Set SLAVE mode", []),
+    Fun(Cluster).
+
+
 priority(Node, Tid) -> 
     [ [Prio] ] = ets:match(Tid, {'$1', Node, '_'}),
     Prio.
 
 
 nodeup(Node, #{ nodes := T_Nodes}=Data) -> 
-    case rpc:call(Node, ranch_ha, start_cluster, maps:get(args, Data)) of
-	{error, Reason} ->
-	    ?error("start_cluster failed on node ~s: ~p", [Node, Reason]),
-	    [[Prio]] = ets:match(T_Nodes, {'$1', Node, '_'}),
-	    true = ets:insert(T_Nodes, {Prio, Node, false}),
-	    ok;
-	{ok, _} ->
-	    [[Prio]] = ets:match(T_Nodes, {'$1', Node, '_'}),
-	    true = ets:insert(T_Nodes, {Prio, Node, true}),
-	    ranch_ha_policy:node_change(maps:get(cluster, Data))
-    end.
+    true = rpc:cast(Node, ranch_ha, start_cluster, maps:get(args, Data)),
+    [[Prio]] = ets:match(T_Nodes, {'$1', Node, '_'}),
+    true = ets:insert(T_Nodes, {Prio, Node, true}),
+    ranch_ha_policy:node_change(maps:get(cluster, Data)).
 	
 
 nodedown(Node, #{ nodes := T_Nodes }=Data) -> 
