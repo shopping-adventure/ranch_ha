@@ -8,6 +8,8 @@
 %%%-------------------------------------------------------------------
 -module(ranch_ha_sup).
 
+-include("ranch_ha.hrl").
+
 -behaviour(supervisor).
 
 %% API
@@ -23,9 +25,10 @@ start_link() ->
     supervisor:start_link({local, ?SERVER}, ?MODULE, []).
 
 
-start_monitor(Ref, Nodes, Opts) ->
-    ClusterSup = #{ id => Ref,
-		    start => {ranch_ha_cluster_sup, start_link, [Ref, Nodes, Opts]},
+-spec start_monitor(#cluster{}, [atom()], term()) -> {ok, pid()} | {error, term()}.
+start_monitor(Cluster, Nodes, Opts) ->
+    ClusterSup = #{ id => Cluster#cluster.id,
+		    start => {ranch_ha_cluster, start_link, [Cluster, Nodes, Opts]},
 		    type => supervisor },
     supervisor:start_child(?SERVER, ClusterSup).
 

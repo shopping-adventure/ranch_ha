@@ -6,7 +6,9 @@
 %%% @end
 %%% Created :  3 Oct 2016 by Jean Parpaillon <jean.parpaillon@free.fr>
 %%%-------------------------------------------------------------------
--module(ranch_ha_cluster_sup).
+-module(ranch_ha_cluster).
+
+-include("ranch_ha.hrl").
 
 -behaviour(supervisor).
 
@@ -16,21 +18,26 @@
 %% Supervisor callbacks
 -export([init/1]).
 
-start_link(Ref, Nodes, Opts) ->
-    supervisor:start_link({local, Ref}, ?MODULE, [Ref, Nodes, Opts]).
 
+-spec start_link(#cluster{}, [node()], term()) -> {ok, pid()} | {error, term()}.
+start_link(Cluster, Nodes, Opts) ->
+    supervisor:start_link(?MODULE, [Cluster, Nodes, Opts]).
 
-init([Ref, Nodes, Opts]) ->
+%%%
+%%% Private
+%%%
+init([Cluster, Nodes, Opts]) ->
     SupFlags = #{ strategy => one_for_one,
 		  intensity => 1,
 		  period => 5 },
-    Monitor = #{ id => {monitor, Ref},
-		 start => {ranch_ha_monitor, start_link, [Ref, Nodes, Opts]},
+
+    Monitor = #{ id => Cluster#cluster.monitor,
+		 start => {ranch_ha_monitor, start_link, [Cluster, Nodes, Opts]},
 		 type => worker },
 
     {PolicyName, PolicyOpts} = proplists:get_value(policy, Opts, {round_robin, []}),
-    Policy = #{ id => {policy, Ref},
-		start => {ranch_ha_policy, start_link, [Ref, PolicyName, PolicyOpts]},
+    Policy = #{ id => Cluster#cluster.policy,
+		start => {ranch_ha_policy, start_link, [Cluster, PolicyName, PolicyOpts]},
 		type => worker },
     {ok, {SupFlags, [Monitor, Policy]}}.
 

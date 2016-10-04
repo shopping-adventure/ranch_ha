@@ -7,6 +7,8 @@
 
 -module(ranch_ha_policy).
 
+-include("ranch_ha.hrl").
+
 -behaviour(gen_server).
 
 -export([start_link/3,
@@ -24,7 +26,7 @@
 	 code_change/3]).
 
 
--callback init(Cluster :: ranch_ha:cluster(), Opts :: any()) -> {ok, State :: any()} | {error, any()}.
+-callback init(Cluster :: #cluster{}, Opts :: any()) -> {ok, State :: any()} | {error, any()}.
 -callback next(State :: any()) -> {atom() | undefined, State :: any()}.
 -callback node_change(State :: any()) -> {ok, State :: any()} | {error, any()}.
 
@@ -38,19 +40,19 @@
 
 -export_type([t/0]).
 
--spec start_link(ranch_ha:cluster(), t(), term()) -> {ok, pid()} | {error, term()}.
+-spec start_link(#cluster{}, t(), term()) -> {ok, pid()} | {error, term()}.
 start_link(Cluster, Policy, Opts) ->
-    gen_server:start_link({local, {policy, Cluster}}, ?MODULE, [Cluster, Policy, Opts], []).
+    gen_server:start_link({local, Cluster#cluster.policy}, ?MODULE, [Cluster, Policy, Opts], []).
 
 
--spec next(ranch_ha:cluster()) -> atom().
+-spec next(#cluster{}) -> atom().
 next(Cluster) ->
-    gen_server:call({policy, Cluster}, next).
+    gen_server:call(Cluster#cluster.policy, next).
 
 
--spec node_change(ranch_ha:cluster()) -> ok.
+-spec node_change(#cluster{}) -> ok.
 node_change(Cluster) ->
-    gen_server:cast({policy, Cluster}, node_change).
+    gen_server:cast(Cluster#cluster.policy, node_change).
 
 
 %%
