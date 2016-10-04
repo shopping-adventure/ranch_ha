@@ -12,7 +12,7 @@
 
 %% API
 -export([start_link/0,
-	 start_monitor/2]).
+	 start_monitor/3]).
 
 %% Supervisor callbacks
 -export([init/1]).
@@ -23,17 +23,17 @@ start_link() ->
     supervisor:start_link({local, ?SERVER}, ?MODULE, []).
 
 
-start_monitor(Nodes, Fun) ->
-    supervisor:start_child(?SERVER, [Nodes, Fun]).
+start_monitor(Ref, Nodes, Opts) ->
+    ClusterSup = #{ id => Ref,
+		    start => {ranch_ha_cluster_sup, start_link, [Ref, Nodes, Opts]},
+		    type => supervisor },
+    supervisor:start_child(?SERVER, ClusterSup).
 
 %%%
 %%% Private
 %%%
 init([]) ->
-    SupFlags = #{strategy => simple_one_for_one,
+    SupFlags = #{strategy => one_for_one,
 		 intensity => 1,
 		 period => 5},
-    Monitor = #{ id => ranch_ha_monitor,
-		 start => {ranch_ha_monitor, start_link, []},
-		 type => worker },
-    {ok, {SupFlags, [Monitor]}}.
+    {ok, {SupFlags, []}}.

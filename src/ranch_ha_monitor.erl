@@ -17,8 +17,10 @@
 -behaviour(gen_statem).
 
 %% API
--export([start_link/2,
-	 status/0]).
+-export([start_link/3,
+	 'master?'/1,
+	 alive/1,
+	 all/1]).
 
 %% gen_statem callbacks
 -export([init/1, 
@@ -30,17 +32,29 @@
 -export([master/3,
 	 slave/3]).
 
--define(SERVER, ?MODULE).
+-define(DELAY, 2000).
+-define(NODES_TID, ranch_ha_monitor_nodes).
 
 %% Nodes: cluster nodes, first is higher priority
-%% Fun: called when node becomes slave or master
-start_link(Nodes, Fun) ->
-    gen_statem:start_link({local, ?SERVER}, ?MODULE, #{ nodes => Nodes, f => Fun }, []).
+start_link(Ref, Nodes, Opts) ->
+    Args = [Ref, Nodes, Opts],
+    Refresh = proplists:get_value(refresh, Opts, ?DELAY),
+    gen_statem:start_link({local, Ref}, ?MODULE, #{ nodes => Nodes, refresh => Refresh, args => Args }, []).
 
 
--spec status() -> master | slave.
-status() ->
-    gen_statem:call(?SERVER, status).
+-spec 'master?'(Ref :: ranch_ha:cluster()) -> master | slave.
+'master?'(Ref) ->
+    gen_statem:call({monitor, Ref}, 'master?').
+
+
+-spec alive(Ref :: ranch_ha:cluster()) -> [atom()].
+alive(Ref) ->
+    gen_statem:call({monitor, Ref}, alive).
+
+
+-spec all(Ref :: ranch_ha:cluster()) -> [{atom(), boolean()}].
+all(Ref) ->
+    gen_statem:call({monitor, Ref}, all).
 
 %%%
 %%% Private
@@ -49,16 +63,17 @@ callback_mode() ->
     state_functions.
 
 
-init(#{ nodes := [ Master | _ ]=Nodes, f := Fun }) ->
-    ?debug("Start monitoring nodes: ~p", [Nodes]),
+init(#{ nodes := [ Master | _ ]=NodesList, refresh := Refresh, args := Args }) ->
+    ?debug("Start monitoring nodes: ~p", [NodesList]),
     ok = net_kernel:monitor_nodes(true, [nodedown_reason]),
-    Data = lists:map(fun (Node) ->
-			     Connect = net_kernel:connect_node(Node),
-			     {Node, Connect}
-		     end, Nodes),
-    State0 = case node() of Master -> master; _ -> slave end,
-    ok = Fun(State0),
-    {ok, State0, #{ nodes => Data, f => Fun }}.
+    T_Nodes = init_table(NodesList),
+    _ = connect(T_Nodes),
+    State0 = case node() of 
+		 Master -> ?info("Set MASTER mode", []), master; 
+		 _ -> ?info("Set SLAVE mode", []), slave
+	     end,
+    {ok, _} = timer:send_after(Refresh, refresh),
+    {ok, State0, #{ nodes => T_Nodes, refresh => Refresh, args => Args }}.
 
 
 terminate(_Reason, _Data, _State) ->
@@ -69,42 +84,44 @@ code_change(_OldVsn, StateName, StateData, _Extra) ->
     {ok, StateName, StateData}.
 
 
-master(info, {nodeup, Node, _Infos}, #{ nodes := Nodes0, f := Fun }=Data0) ->
-    Priority = priority(Node, Nodes0),
-    Data = Data0#{ nodes => status(Node, true, Priority) },
-    case priority(node(), Nodes0) of
-	MyPriority when Priority > MyPriority ->
-	    ?debug("Changing to SLAVE mode (MASTER: ~s)", [Node]),
-	    ok = Fun(slave),
+master(info, {nodeup, Node, _Infos}, #{ nodes := T_Nodes, args := Args }=Data) ->
+    Priority = priority(Node, T_Nodes),
+    ok = nodeup(Node, T_Nodes, Args),
+    case priority(node(), T_Nodes) of
+	MyPriority when Priority < MyPriority ->
+	    ?debug("Set SLAVE mode (MASTER: ~s)", [Node]),
 	    {next_state, slave, Data};
 	_ ->
-	    ?debug("New node up, with lower priority: ~s", [Node]),
+	    ?debug("New node up: ~s", [Node]),
 	    {keep_state, Data}
     end;
 
-master(info, {nodedown, Node, _Infos}, #{ nodes := Nodes }=Data) ->
-    {keep_state, Data#{ nodes := status(Node, false, Nodes)}};
+master(info, {nodedown, Node, _Infos}, #{ nodes := T_Nodes }=Data) ->
+    ok = nodedown(Node, T_Nodes),
+    {keep_state, Data};
 
-master({call, From}, status, Data) ->
-    {keep_state, Data, [{reply, From, master}]}.
+master({call, From}, 'master?', Data) ->
+    {keep_state, Data, [{reply, From, master}]};
+
+master(Type, Other, Data) ->
+    handle_event(Type, Other, Data).
 
 
-slave(info, {nodeup, Node, _Infos}, #{ nodes := Nodes }=Data) ->
-    {next_state, slave, Data#{ nodes := status(Node, true, Nodes)}};
+slave(info, {nodeup, Node, _Infos}, #{ nodes := T_Nodes, args := Args }=Data) ->
+    ok = nodeup(Node, T_Nodes, Args),
+    {next_state, slave, Data};
 
-slave(info, {nodedown, Node, _Infos}, #{ nodes := Nodes0, f := Fun }=Data0) ->
-    Priority = priority(Node, Nodes0),
-    Nodes = status(Node, false, Nodes0),
-    Data = Data0#{ nodes := Nodes},
-    case priority(node(), Nodes0) of
-	MyPriority when Priority < MyPriority ->
+slave(info, {nodedown, Node, _Infos}, #{ nodes := T_Nodes }=Data) ->
+    Priority = priority(Node, T_Nodes),
+    ok = nodedown(Node, T_Nodes),
+    case priority(node(), T_Nodes) of
+	MyPriority when Priority > MyPriority ->
 	    ?debug("SLAVE node down ~s", [Node]),
 	    {next_state, slave, Data};
-	MyPriority when Priority > MyPriority ->
-	    case 'status?'(node(), Nodes) of
+	MyPriority when Priority < MyPriority ->
+	    case 'status?'(node(), T_Nodes) of
 		master ->
 		    ?debug("Changing to MASTER mode", []),
-		    ok = Fun(master),
 		    {next_state, master, Data};
 		slave ->
 		    ?debug("Salve node going down: ~s", [Node]),
@@ -112,51 +129,78 @@ slave(info, {nodedown, Node, _Infos}, #{ nodes := Nodes0, f := Fun }=Data0) ->
 	    end
     end;
 
-slave({call, From}, status, Data) ->
-    {keep_state, Data, [{reply, From, slave}]}.
+slave({call, From}, 'master?', Data) ->
+    {keep_state, Data, [{reply, From, slave}]};
+
+slave(Type, Other, Data) ->
+    handle_event(Type, Other, Data).
 
 
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
-priority(Node, Nodes) -> priority(Node, 0, Nodes).
+init_table(NodesList) ->
+    T_Nodes = ets:new(?NODES_TID, [{read_concurrency, true}, ordered_set]),
+    _ = lists:foldl(fun (Node, Prio) ->
+			    true = ets:insert(T_Nodes, {Prio, Node, node() == Node}),
+			    Prio+1
+		    end, 0, NodesList),
+    T_Nodes.
 
-priority(_, _, []) -> throw(not_found);
-priority(Node, I, [ {Node, _} | _Nodes ]) -> I;
-priority(Node, I, [ {_Node2, _} | Nodes]) -> priority(Node, I-1, Nodes).
+
+priority(Node, Tid) -> 
+    [ [Prio] ] = ets:match(Tid, {'$1', Node, '_'}),
+    Prio.
 
 
-status(Node, Status, Nodes) -> lists:keyreplace(Node, 1, Nodes, {Node, Status}).
+nodeup(Node, T_Nodes, Args) -> 
+    case rpc:call(Node, ranch_ha, start_cluster, Args) of
+	{error, Reason} ->
+	    ?error("start_cluster failed on node ~s: ~p", [Node, Reason]),
+	    [[Prio]] = ets:match(T_Nodes, {'$1', Node, '_'}),
+	    true = ets:insert(T_Nodes, {Prio, Node, false});
+	ok ->
+	    [[Prio]] = ets:match(T_Nodes, {'$1', Node, '_'}),
+	    true = ets:insert(T_Nodes, {Prio, Node, true})
+    end,
+    ok.
+	
+
+nodedown(Node, T_Nodes) -> 
+    [[Prio]] = ets:match(T_Nodes, {'$1', Node, '_'}),
+    true = ets:update_element(T_Nodes, {Prio, Node, false}),
+    ok.
 
 
-'status?'(_Node, []) -> slave;
+'status?'(Node, Nodes) -> 
+    'status?'(Node, ets:first(Nodes), Nodes).
+
+
+'status?'(_Node, '$end_of_table', _) -> slave;
 %% No node of higher priority is alive -> master
-'status?'(Node, [{Node, true} | _Nodes]) -> master;
-%% Looked up node is down
-'status?'(Node, [{Node, false} | _Nodes]) -> slave;
-%% Node2 is alive and of higher priority -> slave
-'status?'(_Node1, [{_Node2, true} | _Nodes]) -> slave;
-%% Node2 is not alive and of higher priority -> recurse
-'status?'(Node, [{_Node2, false} | Nodes]) -> 'status?'(Node, Nodes).
+'status?'(Node, Prio, Nodes) -> 
+    case ets:lookup(Nodes, Prio) of
+	[{_, Node, true}] -> master;
+	[{_, Node, false}] -> slave;
+	[{_, _OtherNode, true}] -> slave;
+	[{_, _OtherNode, false}] -> 'status?'(Node, ets:next(Nodes, Prio))
+    end.
 
 
-%%%
-%%% eunit
-%%%
--ifdef(TEST).
-'status?_test_'() ->
-    [
-     ?_assertMatch(slave, 
-		  'status?'(node1, [{nodeA, false}, {nodeB, false}])),
-     ?_assertMatch(slave, 
-		  'status?'(node1, [{nodeA, false}, {nodeB, true}])),
-     ?_assertMatch(master,
-		   'status?'(node1, [{node1, true}, {node2, true}, {node3, true}])),
-     ?_assertMatch(slave,
-		   'status?'(node2, [{node1, true}, {node2, true}, {node3, true}])),
-     ?_assertMatch(master,
-		   'status?'(node2, [{node1, false}, {node2, true}, {node3, true}])),
-     ?_assertMatch(slave,
-		   'status?'(node2, [{node1, false}, {node2, false}, {node3, true}]))
-    ].
--endif.
+alive_(T_Nodes) ->
+    lists:map(fun ([Node]) -> Node end, ets:match(T_Nodes, {'_', '$1', true})).
+
+
+connect(T_Nodes) -> 
+    ets:insert(T_Nodes, lists:map(fun ({Prio, Node, false}) ->
+					  {Prio, Node, net_kernel:connect_node(Node)}
+				  end, ets:match_object(T_Nodes, {'_', '_', false}))).
+
+
+handle_event({call, From}, alive, #{ nodes := T_Nodes }=Data) ->
+    {keep_state, Data, [{reply, From, alive_(T_Nodes)}]};
+
+handle_event(info, refresh, #{ nodes := T_Nodes, refresh := Delay }=Data) ->
+    ok = connect(T_Nodes),
+    {ok, _} = timer:send_after(Delay, refresh),
+    {keep_state, Data}.
