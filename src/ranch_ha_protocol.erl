@@ -7,6 +7,8 @@
 
 -module(ranch_ha_protocol).
 
+-include("ranch_ha.hrl").
+
 -behaviour(ranch_protocol).
 
 -export([start_link/4]).
@@ -22,5 +24,12 @@
 			{ok, ConnectionPid :: pid()} | {ok, SupPid :: pid(), ConnectionPid :: pid()}.
 start_link(Ref, Socket, Transport, ProtocolOptions) ->
     {Cluster, Protocol, _Opts} = proplists:get_value(ha, ProtocolOptions),
-    Node = ranch_ha_policy:next(Cluster),
-    rpc:call(Node, Protocol, start_link, [Ref, Socket, Transport, ProtocolOptions]).
+    Local = node(),
+    case ranch_ha_policy:next(Cluster) of
+	Local -> 
+	    Protocol:start_link(Ref, Socket, Transport, ProtocolOptions);
+	Node ->
+	    {ok, Proxy} = ranch_ha_proxy_transport:start_link(Socket, Transport),
+	    rpc:call(Node, Protocol, start_link, 
+		     [Ref, Proxy, ranch_ha_proxy_transport, ProtocolOptions])
+    end.

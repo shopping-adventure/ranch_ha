@@ -89,4 +89,5 @@ code_change(_OldVsn, S, _Extra) -> {ok, S}.
 %%%
 %%% Private
 %%%
-policy_to_mod(round_robin) -> ranch_ha_policy_round_robin.
+policy_to_mod(round_robin) -> ranch_ha_policy_round_robin;
+policy_to_mod(random) -> ranch_ha_policy_random.
